@@ -14,24 +14,25 @@ import { expandScoreWithVerses, getBeatsPerMeasure, midiToFrequency } from '../u
 // FORMANT & SYNTHESIS PARAMETERS PER CHORAL VOICE
 // ============================================================================
 
-const VOICE_FORMANTS: Record<VoiceId, [number, number, number]> = {
-  soprano: [800, 1250, 2800],
-  contralto: [680, 1120, 2500],
-  tenor: [580, 1020, 2350],
-  bajo: [460, 880, 2100],
+const VOICE_FORMANTS: Record<VoiceId, [number, number]> = {
+  soprano: [760, 1320],
+  contralto: [640, 1150],
+  tenor: [540, 1020],
+  bajo: [420, 860],
 };
 
-function createReverbImpulse(ctx: BaseAudioContext, seconds = 1.65, decay = 2.6): AudioBuffer {
+function createReverbImpulse(ctx: BaseAudioContext, seconds = 1.45, decay = 2.9): AudioBuffer {
   const rate = ctx.sampleRate;
   const length = Math.floor(rate * seconds);
   const impulse = ctx.createBuffer(2, length, rate);
   for (let ch = 0; ch < 2; ch++) {
     const channelData = impulse.getChannelData(ch);
+    let lp = 0;
     for (let i = 0; i < length; i++) {
       const env = Math.pow(1 - i / length, decay);
-      // Slight low-pass smoothing by averaging consecutive noise samples
-      const n = (Math.random() * 2 - 1) * 0.55;
-      channelData[i] = i > 0 ? channelData[i - 1] * 0.35 + n * env * 0.65 : n * env;
+      const white = (Math.random() * 2 - 1) * 0.45;
+      lp = lp * 0.65 + white * 0.35; // warm dark hall tail
+      channelData[i] = lp * env;
     }
   }
   return impulse;
@@ -56,15 +57,21 @@ export function computeEffectiveVoiceGain(
       gain *= 1.48;
       isBoostedLead = true;
     } else {
-      gain *= 0.36;
+      gain *= 0.34;
     }
   }
 
   return { gain: Math.max(0, Math.min(2.0, gain)), isBoostedLead };
 }
 
+interface ActiveVoiceNode {
+  gainNode: GainNode;
+  stopables: AudioScheduledSourceNode[];
+}
+
 /**
  * Schedule a single synthesized note into any BaseAudioContext (live AudioContext or OfflineAudioContext).
+ * Returns a handle so live playback can cleanly silence notes on Stop/Pause.
  */
 export function scheduleSynthNote(
   ctx: BaseAudioContext,
@@ -77,21 +84,21 @@ export function scheduleSynthNote(
     durationSec: number;
     velocity: number;
     gainScale: number;
-    pan: number;
+    pan?: number;
     instrument: SynthInstrument;
     isBoostedLead?: boolean;
   }
-): void {
+): ActiveVoiceNode | null {
   const { voice, pitch, startTime, durationSec, velocity, gainScale, pan, instrument, isBoostedLead } = params;
-  if (gainScale <= 0.001 || durationSec <= 0.01) return;
+  if (gainScale <= 0.001 || durationSec <= 0.01) return null;
 
   const freq = midiToFrequency(pitch);
-  const velNorm = Math.max(0.15, Math.min(1.0, velocity / 127));
-  const baseAmp = 0.24 * velNorm * gainScale;
+  const velNorm = Math.max(0.2, Math.min(1.0, velocity / 127));
+  const baseAmp = 0.23 * velNorm * gainScale;
 
   const outGain = ctx.createGain();
-  const panner = typeof ctx.createStereoPanner === 'function' ? ctx.createStereoPanner() : null;
-  if (panner) {
+  if (pan !== undefined && typeof ctx.createStereoPanner === 'function') {
+    const panner = ctx.createStereoPanner();
     panner.pan.setValueAtTime(Math.max(-1, Math.min(1, pan)), startTime);
     outGain.connect(panner);
     panner.connect(destination);
@@ -102,81 +109,78 @@ export function scheduleSynthNote(
   }
 
   const safeDur = Math.max(0.06, durationSec);
-  const release = instrument === 'piano' ? 0.16 : instrument === 'organ' ? 0.10 : 0.22;
+  const release = instrument === 'piano' ? 0.14 : instrument === 'organ' ? 0.08 : 0.16;
   const stopTime = startTime + safeDur + release + 0.04;
+  const stopables: AudioScheduledSourceNode[] = [];
 
   if (instrument === 'choir') {
-    // Warm formant-filtered choral voice with gentle vibrato
-    const osc1 = ctx.createOscillator();
-    const osc2 = ctx.createOscillator();
-    osc1.type = 'sawtooth';
-    osc2.type = 'triangle';
-    osc1.frequency.setValueAtTime(freq, startTime);
-    osc2.frequency.setValueAtTime(freq * 1.0025, startTime); // subtle choral ensemble detune
+    // Pure, warm, consonant choral blend: clean sine fundamental + soft triangle + gentle vocal formant
+    const oscFund = ctx.createOscillator();
+    const oscWarm = ctx.createOscillator();
+    const oscOct = ctx.createOscillator();
 
-    // Vibrato LFO
+    oscFund.type = 'sine';
+    oscWarm.type = 'triangle';
+    oscOct.type = 'sine';
+
+    oscFund.frequency.setValueAtTime(freq, startTime);
+    oscWarm.frequency.setValueAtTime(freq * 1.0012, startTime); // very subtle choral shimmer
+    oscOct.frequency.setValueAtTime(freq * 2, startTime);
+
+    // Subtle vocal vibrato (delayed onset slightly for natural phrasing)
     const lfo = ctx.createOscillator();
     const lfoGain = ctx.createGain();
-    lfo.frequency.setValueAtTime(voice === 'soprano' ? 5.2 : voice === 'bajo' ? 4.4 : 4.8, startTime);
-    lfoGain.gain.setValueAtTime(freq * 0.0045, startTime);
+    lfo.frequency.setValueAtTime(voice === 'soprano' ? 5.0 : voice === 'bajo' ? 4.2 : 4.6, startTime);
+    lfoGain.gain.setValueAtTime(0, startTime);
+    lfoGain.gain.linearRampToValueAtTime(freq * 0.0028, startTime + Math.min(0.22, safeDur * 0.5));
     lfo.connect(lfoGain);
-    lfoGain.connect(osc1.frequency);
-    lfoGain.connect(osc2.frequency);
+    lfoGain.connect(oscFund.frequency);
+    lfoGain.connect(oscWarm.frequency);
 
-    // Pre-filter mix
-    const srcMix = ctx.createGain();
-    srcMix.gain.setValueAtTime(0.55, startTime);
-    osc1.connect(srcMix);
-    osc2.connect(srcMix);
+    const gFund = ctx.createGain();
+    const gWarm = ctx.createGain();
+    const gOct = ctx.createGain();
+    gFund.gain.setValueAtTime(0.66, startTime);
+    gWarm.gain.setValueAtTime(0.32, startTime);
+    gOct.gain.setValueAtTime(isBoostedLead ? 0.16 : 0.09, startTime);
 
-    // Two parallel vocal formant filters (F1 & F2) + warm lowpass
-    const [f1Freq, f2Freq] = VOICE_FORMANTS[voice];
-    const f1 = ctx.createBiquadFilter();
-    f1.type = 'bandpass';
-    f1.frequency.setValueAtTime(f1Freq, startTime);
-    f1.Q.setValueAtTime(3.2, startTime);
+    const [f1Freq] = VOICE_FORMANTS[voice];
+    const formant = ctx.createBiquadFilter();
+    formant.type = 'peaking';
+    formant.frequency.setValueAtTime(f1Freq, startTime);
+    formant.Q.setValueAtTime(1.6, startTime);
+    formant.gain.setValueAtTime(isBoostedLead ? 5.5 : 3.2, startTime);
 
-    const f2 = ctx.createBiquadFilter();
-    f2.type = 'bandpass';
-    f2.frequency.setValueAtTime(f2Freq, startTime);
-    f2.Q.setValueAtTime(4.0, startTime);
+    const smoothLp = ctx.createBiquadFilter();
+    smoothLp.type = 'lowpass';
+    smoothLp.frequency.setValueAtTime(isBoostedLead ? 2800 : 1750, startTime);
 
-    const warmLp = ctx.createBiquadFilter();
-    warmLp.type = 'lowpass';
-    warmLp.frequency.setValueAtTime(isBoostedLead ? 3200 : 1850, startTime);
+    oscFund.connect(gFund);
+    oscWarm.connect(gWarm);
+    oscOct.connect(gOct);
+    gFund.connect(formant);
+    gWarm.connect(formant);
+    gOct.connect(formant);
+    formant.connect(smoothLp);
+    smoothLp.connect(outGain);
 
-    const f1Gain = ctx.createGain();
-    f1Gain.gain.setValueAtTime(1.15, startTime);
-    const f2Gain = ctx.createGain();
-    f2Gain.gain.setValueAtTime(isBoostedLead ? 0.85 : 0.52, startTime);
-    const bodyGain = ctx.createGain();
-    bodyGain.gain.setValueAtTime(0.45, startTime);
-
-    srcMix.connect(f1);
-    srcMix.connect(f2);
-    srcMix.connect(warmLp);
-    f1.connect(f1Gain);
-    f2.connect(f2Gain);
-    warmLp.connect(bodyGain);
-    f1Gain.connect(outGain);
-    f2Gain.connect(outGain);
-    bodyGain.connect(outGain);
-
-    // Vocal envelope
-    const attack = Math.min(0.095, safeDur * 0.35);
+    const attack = Math.min(0.065, safeDur * 0.25);
     outGain.gain.setValueAtTime(0.0001, startTime);
     outGain.gain.linearRampToValueAtTime(baseAmp, startTime + attack);
-    outGain.gain.setValueAtTime(baseAmp * 0.92, startTime + Math.max(attack, safeDur - 0.03));
+    outGain.gain.setValueAtTime(baseAmp * 0.94, startTime + Math.max(attack, safeDur - 0.025));
     outGain.gain.exponentialRampToValueAtTime(0.0001, startTime + safeDur + release);
 
-    osc1.start(startTime);
-    osc2.start(startTime);
+    oscFund.start(startTime);
+    oscWarm.start(startTime);
+    oscOct.start(startTime);
     lfo.start(startTime);
-    osc1.stop(stopTime);
-    osc2.stop(stopTime);
+    oscFund.stop(stopTime);
+    oscWarm.stop(stopTime);
+    oscOct.stop(stopTime);
     lfo.stop(stopTime);
+    stopables.push(oscFund, oscWarm, oscOct, lfo);
   } else if (instrument === 'piano') {
-    // Rehearsal piano: clear attack + natural harmonic decay
+    // Crisp rehearsal piano: pure attack + clear pitch center
     const osc1 = ctx.createOscillator();
     const osc2 = ctx.createOscillator();
     const osc3 = ctx.createOscillator();
@@ -190,14 +194,14 @@ export function scheduleSynthNote(
     const g1 = ctx.createGain();
     const g2 = ctx.createGain();
     const g3 = ctx.createGain();
-    g1.gain.setValueAtTime(0.75, startTime);
-    g2.gain.setValueAtTime(0.22, startTime);
-    g3.gain.setValueAtTime(0.08, startTime);
+    g1.gain.setValueAtTime(0.76, startTime);
+    g2.gain.setValueAtTime(0.20, startTime);
+    g3.gain.setValueAtTime(0.06, startTime);
 
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.setValueAtTime(Math.min(7500, freq * 8), startTime);
-    lp.frequency.exponentialRampToValueAtTime(Math.max(700, freq * 2.2), startTime + safeDur + 0.25);
+    lp.frequency.setValueAtTime(Math.min(6500, freq * 7), startTime);
+    lp.frequency.exponentialRampToValueAtTime(Math.max(700, freq * 2.2), startTime + safeDur + 0.2);
 
     osc1.connect(g1);
     osc2.connect(g2);
@@ -208,8 +212,8 @@ export function scheduleSynthNote(
     lp.connect(outGain);
 
     outGain.gain.setValueAtTime(0.0001, startTime);
-    outGain.gain.linearRampToValueAtTime(baseAmp * 1.25, startTime + 0.012);
-    outGain.gain.exponentialRampToValueAtTime(baseAmp * 0.45, startTime + Math.min(0.35, safeDur));
+    outGain.gain.linearRampToValueAtTime(baseAmp * 1.2, startTime + 0.01);
+    outGain.gain.exponentialRampToValueAtTime(baseAmp * 0.46, startTime + Math.min(0.35, safeDur));
     outGain.gain.setValueAtTime(baseAmp * 0.42, startTime + safeDur);
     outGain.gain.exponentialRampToValueAtTime(0.0001, startTime + safeDur + release);
 
@@ -219,13 +223,14 @@ export function scheduleSynthNote(
     osc1.stop(stopTime);
     osc2.stop(stopTime);
     osc3.stop(stopTime);
+    stopables.push(osc1, osc2, osc3);
   } else if (instrument === 'organ') {
-    // Pipe organ drawbars (8', 4', 2' + gentle 16' for bass)
+    // Classic church pipe organ
     const harmonics = voice === 'bajo' ? [0.5, 1, 2, 3] : [1, 2, 3, 4];
-    const weights = voice === 'bajo' ? [0.35, 0.65, 0.28, 0.12] : [0.68, 0.34, 0.16, 0.08];
+    const weights = voice === 'bajo' ? [0.32, 0.68, 0.24, 0.10] : [0.70, 0.30, 0.14, 0.06];
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.setValueAtTime(2800, startTime);
+    lp.frequency.setValueAtTime(2400, startTime);
     lp.connect(outGain);
 
     harmonics.forEach((h, idx) => {
@@ -238,57 +243,61 @@ export function scheduleSynthNote(
       hg.connect(lp);
       osc.start(startTime);
       osc.stop(stopTime);
+      stopables.push(osc);
     });
 
     outGain.gain.setValueAtTime(0.0001, startTime);
-    outGain.gain.linearRampToValueAtTime(baseAmp * 0.88, startTime + 0.032);
-    outGain.gain.setValueAtTime(baseAmp * 0.88, startTime + Math.max(0.035, safeDur - 0.02));
+    outGain.gain.linearRampToValueAtTime(baseAmp * 0.85, startTime + 0.028);
+    outGain.gain.setValueAtTime(baseAmp * 0.85, startTime + Math.max(0.032, safeDur - 0.02));
     outGain.gain.exponentialRampToValueAtTime(0.0001, startTime + safeDur + release);
   } else {
-    // Lush ensemble strings
+    // Smooth ensemble strings
     const osc1 = ctx.createOscillator();
     const osc2 = ctx.createOscillator();
     osc1.type = 'sawtooth';
-    osc2.type = 'sawtooth';
-    osc1.frequency.setValueAtTime(freq * 0.997, startTime);
-    osc2.frequency.setValueAtTime(freq * 1.003, startTime);
+    osc2.type = 'triangle';
+    osc1.frequency.setValueAtTime(freq * 0.9985, startTime);
+    osc2.frequency.setValueAtTime(freq * 1.0015, startTime);
 
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.setValueAtTime(isBoostedLead ? 2900 : 1900, startTime);
-    lp.Q.setValueAtTime(1.1, startTime);
+    lp.frequency.setValueAtTime(isBoostedLead ? 2400 : 1550, startTime);
+    lp.Q.setValueAtTime(0.9, startTime);
 
     osc1.connect(lp);
     osc2.connect(lp);
     lp.connect(outGain);
 
-    const attack = Math.min(0.14, safeDur * 0.4);
+    const attack = Math.min(0.11, safeDur * 0.35);
     outGain.gain.setValueAtTime(0.0001, startTime);
-    outGain.gain.linearRampToValueAtTime(baseAmp * 0.72, startTime + attack);
-    outGain.gain.setValueAtTime(baseAmp * 0.68, startTime + Math.max(attack, safeDur - 0.02));
+    outGain.gain.linearRampToValueAtTime(baseAmp * 0.68, startTime + attack);
+    outGain.gain.setValueAtTime(baseAmp * 0.64, startTime + Math.max(attack, safeDur - 0.02));
     outGain.gain.exponentialRampToValueAtTime(0.0001, startTime + safeDur + release);
 
     osc1.start(startTime);
     osc2.start(startTime);
     osc1.stop(stopTime);
     osc2.stop(stopTime);
+    stopables.push(osc1, osc2);
   }
 
-  // If this voice is Highlighted (Destacar), add a soft crystalline bell/piano attack cue
-  // so singers immediately lock onto their exact entrance pitch!
+  // Highlighted voice pitch-entry reinforcement cue
   if (isBoostedLead && instrument !== 'piano') {
     const cueOsc = ctx.createOscillator();
     const cueGain = ctx.createGain();
     cueOsc.type = 'triangle';
     cueOsc.frequency.setValueAtTime(freq, startTime);
     cueGain.gain.setValueAtTime(0.0001, startTime);
-    cueGain.gain.linearRampToValueAtTime(baseAmp * 0.36, startTime + 0.01);
-    cueGain.gain.exponentialRampToValueAtTime(0.0001, startTime + Math.min(0.28, safeDur));
+    cueGain.gain.linearRampToValueAtTime(baseAmp * 0.34, startTime + 0.01);
+    cueGain.gain.exponentialRampToValueAtTime(0.0001, startTime + Math.min(0.24, safeDur));
     cueOsc.connect(cueGain);
     cueGain.connect(outGain);
     cueOsc.start(startTime);
-    cueOsc.stop(startTime + Math.min(0.32, safeDur) + 0.02);
+    cueOsc.stop(startTime + Math.min(0.28, safeDur) + 0.02);
+    stopables.push(cueOsc);
   }
+
+  return { gainNode: outGain, stopables };
 }
 
 function scheduleMetronomeClick(ctx: BaseAudioContext, dest: AudioNode, time: number, accent: boolean): void {
@@ -306,7 +315,7 @@ function scheduleMetronomeClick(ctx: BaseAudioContext, dest: AudioNode, time: nu
 }
 
 // ============================================================================
-// REAL-TIME CHORAL AUDIO PLAYER
+// REAL-TIME CHORAL AUDIO PLAYER WITH LIVE PER-VOICE MIXER BUSES
 // ============================================================================
 
 export class ChoralAudioEngine {
@@ -314,6 +323,10 @@ export class ChoralAudioEngine {
   private masterGain: GainNode | null = null;
   private reverbNode: ConvolverNode | null = null;
   private reverbGain: GainNode | null = null;
+
+  private voiceBusGain: Partial<Record<VoiceId, GainNode>> = {};
+  private voiceBusPan: Partial<Record<VoiceId, StereoPannerNode>> = {};
+  private activeNodes = new Set<ActiveVoiceNode>();
 
   private isPlaying = false;
   private currentBeat = 0;
@@ -338,7 +351,7 @@ export class ChoralAudioEngine {
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new AudioCtx();
       this.masterGain = this.ctx.createGain();
-      this.masterGain.gain.value = 0.85;
+      this.masterGain.gain.value = 0.88;
 
       const compressor = this.ctx.createDynamicsCompressor();
       compressor.threshold.value = -10;
@@ -348,19 +361,75 @@ export class ChoralAudioEngine {
       compressor.release.value = 0.15;
 
       this.reverbNode = this.ctx.createConvolver();
-      this.reverbNode.buffer = createReverbImpulse(this.ctx, 1.6, 2.7);
+      this.reverbNode.buffer = createReverbImpulse(this.ctx, 1.45, 2.9);
       this.reverbGain = this.ctx.createGain();
-      this.reverbGain.gain.value = 0.24;
+      this.reverbGain.gain.value = 0.20;
 
       this.masterGain.connect(compressor);
       this.reverbNode.connect(this.reverbGain);
       this.reverbGain.connect(compressor);
       compressor.connect(this.ctx.destination);
+
+      // Persistent per-voice mixer buses for instant real-time Solo/Mute/Highlight/Volume response
+      for (const v of VOICE_IDS) {
+        const vg = this.ctx.createGain();
+        vg.gain.value = 1.0;
+        if (typeof this.ctx.createStereoPanner === 'function') {
+          const vp = this.ctx.createStereoPanner();
+          vp.pan.value = VOICE_META[v].defaultPan;
+          vg.connect(vp);
+          vp.connect(this.masterGain);
+          vp.connect(this.reverbNode);
+          this.voiceBusPan[v] = vp;
+        } else {
+          vg.connect(this.masterGain);
+          vg.connect(this.reverbNode);
+        }
+        this.voiceBusGain[v] = vg;
+      }
     }
     if (this.ctx.state === 'suspended') {
       void this.ctx.resume();
     }
     return this.ctx;
+  }
+
+  private applyLiveMixerBuses(): void {
+    if (!this.ctx || !this.mixer || !this.settings) return;
+    const now = this.ctx.currentTime;
+    for (const v of VOICE_IDS) {
+      const { gain } = computeEffectiveVoiceGain(v, this.mixer);
+      const vg = this.voiceBusGain[v];
+      if (vg) {
+        vg.gain.cancelScheduledValues(now);
+        vg.gain.setTargetAtTime(gain, now, 0.018);
+      }
+      const vp = this.voiceBusPan[v];
+      if (vp) {
+        vp.pan.setTargetAtTime(this.settings.stereoSpread ? this.mixer[v].pan : 0, now, 0.02);
+      }
+    }
+  }
+
+  private silenceAllActiveNotes(): void {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    for (const node of this.activeNodes) {
+      try {
+        node.gainNode.gain.cancelScheduledValues(now);
+        node.gainNode.gain.setTargetAtTime(0.0001, now, 0.012);
+        for (const osc of node.stopables) {
+          try {
+            osc.stop(now + 0.045);
+          } catch {
+            // already stopped
+          }
+        }
+      } catch {
+        // ignore cleanup error
+      }
+    }
+    this.activeNodes.clear();
   }
 
   public updateState(score: ScoreData, mixer: MixerState, settings: PlaybackSettings): void {
@@ -380,6 +449,7 @@ export class ChoralAudioEngine {
     if (this.currentBeat > this.totalBeats) {
       this.currentBeat = 0;
     }
+    this.applyLiveMixerBuses();
   }
 
   public previewNote(pitch: number, voice: VoiceId, instrument: SynthInstrument = 'piano'): void {
@@ -400,6 +470,8 @@ export class ChoralAudioEngine {
   public play(fromBeat?: number): void {
     if (!this.score || !this.settings || !this.mixer) return;
     const ctx = this.ensureContext();
+    this.applyLiveMixerBuses();
+    this.silenceAllActiveNotes();
 
     if (fromBeat !== undefined) {
       this.currentBeat = Math.max(0, Math.min(this.totalBeats, fromBeat));
@@ -420,12 +492,14 @@ export class ChoralAudioEngine {
   public pause(): void {
     this.isPlaying = false;
     this.stopLoops();
+    this.silenceAllActiveNotes();
     this.emitUpdate();
   }
 
   public stop(): void {
     this.isPlaying = false;
     this.stopLoops();
+    this.silenceAllActiveNotes();
     this.currentBeat = 0;
     this.scheduledNoteIds.clear();
     this.lastMetronomeBeat = -1;
@@ -433,6 +507,7 @@ export class ChoralAudioEngine {
   }
 
   public seek(beat: number): void {
+    this.silenceAllActiveNotes();
     this.currentBeat = Math.max(0, Math.min(this.totalBeats, beat));
     this.scheduledNoteIds.clear();
     this.lastMetronomeBeat = Math.floor(this.currentBeat) - 1;
@@ -450,7 +525,8 @@ export class ChoralAudioEngine {
 
   private startLoops(): void {
     this.stopLoops();
-    this.schedulerTimer = window.setInterval(() => this.scheduleWindow(), 35);
+    this.scheduleWindow();
+    this.schedulerTimer = window.setInterval(() => this.scheduleWindow(), 30);
     const rafStep = () => {
       if (!this.isPlaying || !this.ctx || !this.settings) return;
       const now = this.ctx.currentTime;
@@ -492,40 +568,43 @@ export class ChoralAudioEngine {
 
     const now = this.ctx.currentTime;
     const beatsPerSec = this.settings.tempoBpm / 60;
-    const lookaheadSec = 0.16;
+    const lookaheadSec = 0.14;
     const lookaheadBeats = lookaheadSec * beatsPerSec;
     const winStart = this.currentBeat;
     const winEnd = this.currentBeat + lookaheadBeats;
 
-    // Schedule notes falling in [winStart - 0.03, winEnd]
     for (const note of this.expandedNotes) {
       if (note.startBeat >= winStart - 0.04 && note.startBeat <= winEnd) {
         if (this.scheduledNoteIds.has(note.id)) continue;
         this.scheduledNoteIds.add(note.id);
 
-        const { gain, isBoostedLead } = computeEffectiveVoiceGain(note.voice, this.mixer);
-        if (gain <= 0.001) continue;
+        const voiceBus = this.voiceBusGain[note.voice] ?? this.masterGain;
+        const { isBoostedLead } = computeEffectiveVoiceGain(note.voice, this.mixer);
 
         const deltaBeats = Math.max(0, note.startBeat - this.currentBeat);
         const startTime = now + deltaBeats / beatsPerSec;
         const durationSec = Math.max(0.05, note.durationBeats / beatsPerSec);
-        const pan = this.settings.stereoSpread ? this.mixer[note.voice].pan : 0;
 
-        scheduleSynthNote(this.ctx, this.masterGain, this.reverbNode, {
+        // Route into the persistent voice bus (which applies live Solo/Mute/Highlight/Volume/Pan!)
+        const active = scheduleSynthNote(this.ctx, voiceBus, null, {
           voice: note.voice,
           pitch: note.pitch,
           startTime,
           durationSec,
           velocity: note.velocity,
-          gainScale: gain,
-          pan,
+          gainScale: 1.0,
           instrument: this.settings.instrument,
           isBoostedLead,
         });
+
+        if (active) {
+          this.activeNodes.add(active);
+          const cleanupMs = Math.max(200, (startTime - now + durationSec + 0.4) * 1000);
+          window.setTimeout(() => this.activeNodes.delete(active), cleanupMs);
+        }
       }
     }
 
-    // Schedule metronome clicks
     if (this.settings.metronome) {
       const bpmMeasure = getBeatsPerMeasure(this.score.timeSignature);
       const startInt = Math.max(this.lastMetronomeBeat + 1, Math.floor(winStart));
@@ -589,7 +668,7 @@ export async function renderScoreToWav(opts: WavExportOptions): Promise<Uint8Arr
   );
 
   const beatsPerSec = Math.max(30, opts.tempoBpm) / 60;
-  const totalSec = Math.max(1.5, totalBeats / beatsPerSec + 1.8); // tail for reverb
+  const totalSec = Math.max(1.5, totalBeats / beatsPerSec + 1.6);
   const totalFrames = Math.ceil(totalSec * sampleRate);
 
   const offlineCtx = new OfflineAudioContext(2, totalFrames, sampleRate);
@@ -602,9 +681,9 @@ export async function renderScoreToWav(opts: WavExportOptions): Promise<Uint8Arr
   compressor.ratio.value = 4;
 
   const reverb = offlineCtx.createConvolver();
-  reverb.buffer = createReverbImpulse(offlineCtx, 1.5, 2.7);
+  reverb.buffer = createReverbImpulse(offlineCtx, 1.45, 2.9);
   const reverbGain = offlineCtx.createGain();
-  reverbGain.gain.value = 0.22;
+  reverbGain.gain.value = 0.20;
 
   masterGain.connect(compressor);
   reverb.connect(reverbGain);
@@ -625,7 +704,7 @@ export async function renderScoreToWav(opts: WavExportOptions): Promise<Uint8Arr
         gainScale = 1.48;
         isBoostedLead = true;
       } else {
-        gainScale = 0.36;
+        gainScale = 0.34;
       }
     } else if (opts.customMixer) {
       const eff = computeEffectiveVoiceGain(note.voice, opts.customMixer);
@@ -674,20 +753,19 @@ function encodeAudioBufferToWav(buffer: AudioBuffer): Uint8Array {
   view.setUint32(4, 36 + dataByteLength, true);
   writeString(8, 'WAVE');
   writeString(12, 'fmt ');
-  view.setUint32(16, 16, true); // PCM chunk size
-  view.setUint16(20, 1, true); // PCM format
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
   view.setUint16(22, numChannels, true);
   view.setUint32(24, sampleRate, true);
   view.setUint32(28, sampleRate * blockAlign, true);
   view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true); // 16-bit
+  view.setUint16(34, 16, true);
   writeString(36, 'data');
   view.setUint32(40, dataByteLength, true);
 
   const channels: Float32Array[] = [];
   for (let ch = 0; ch < numChannels; ch++) channels.push(buffer.getChannelData(ch));
 
-  // Soft peak normalize if signal approaches clipping
   let peak = 0;
   for (let ch = 0; ch < numChannels; ch++) {
     const data = channels[ch];

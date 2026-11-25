@@ -53,54 +53,55 @@ function buildScoreFromChords(
 
 /**
  * Classic Public Domain 4-Part SATB Hymn: "Sublime Gracia" (New Britain / Amazing Grace)
- * Key: F Major (1 flat, fifths = -1), Time: 3/4, 16 measures
+ * Key: F Major (1 flat, fifths = -1), Time: 3/4, authentic 16-measure rhythm & SATB harmony
  */
 export function createAmazingGraceDemo(): ScoreData {
   // F4=65, G4=67, A4=69, Bb4=70, C5=72, D5=74
   // C4=60, D4=62, E4=64, F3=53, G3=55, A3=57, Bb3=58, C3=48, D3=50, F2=41
   const slices: ChordSlice[] = [
-    // Pickup + Phrase 1 (F Major)
-    { dur: 1, s: 60, a: 57, t: 53, b: 41 }, // C4
-    { dur: 2, s: 65, a: 60, t: 57, b: 41 }, // F4
-    { dur: 0.5, s: 69, a: 60, t: 57, b: 41 }, // A4
+    // Phrase 1 (anacrusis 1 beat + 4 measures = 12 beats)
+    { dur: 1, s: 60, a: 57, t: 53, b: 41 }, // C4 (Sub-)
+    { dur: 2, s: 65, a: 60, t: 57, b: 41 }, // F4 (-li-)
+    { dur: 0.5, s: 69, a: 60, t: 57, b: 41 }, // A4 (-me)
     { dur: 0.5, s: 65, a: 60, t: 57, b: 41 }, // F4
-    { dur: 2, s: 69, a: 60, t: 57, b: 45 }, // A4 (F/A)
-    { dur: 1, s: 67, a: 60, t: 58, b: 48 }, // G4 (C7)
-    { dur: 2, s: 65, a: 60, t: 57, b: 41 }, // F4
-    { dur: 1, s: 62, a: 58, t: 53, b: 46 }, // D4 (Bb)
-    { dur: 2, s: 60, a: 57, t: 53, b: 41 }, // C4 (F)
+    { dur: 2, s: 69, a: 60, t: 57, b: 45 }, // A4 (gra-)
+    { dur: 1, s: 67, a: 60, t: 58, b: 48 }, // G4 (-cia)
+    { dur: 2, s: 65, a: 60, t: 57, b: 41 }, // F4 (del)
+    { dur: 1, s: 62, a: 58, t: 53, b: 46 }, // D4 (Se-)
+    { dur: 2, s: 60, a: 57, t: 53, b: 41 }, // C4 (-ñor)
 
-    // Phrase 2
-    { dur: 1, s: 60, a: 57, t: 53, b: 41 },
-    { dur: 2, s: 65, a: 60, t: 57, b: 41 },
-    { dur: 0.5, s: 69, a: 60, t: 57, b: 41 },
-    { dur: 0.5, s: 65, a: 60, t: 57, b: 41 },
-    { dur: 2, s: 69, a: 60, t: 57, b: 45 },
-    { dur: 1, s: 67, a: 60, t: 55, b: 43 }, // G4
+    // Phrase 2 (12 beats — C5 held for full 5 beats: 3+2)
+    { dur: 1, s: 60, a: 57, t: 53, b: 41 }, // C4 (que a un)
+    { dur: 2, s: 65, a: 60, t: 57, b: 41 }, // F4 (in-)
+    { dur: 0.5, s: 69, a: 60, t: 57, b: 41 }, // A4 (-fe-)
+    { dur: 0.5, s: 65, a: 60, t: 57, b: 41 }, // F4 (-liz)
+    { dur: 2, s: 69, a: 60, t: 57, b: 45 }, // A4 (sal-)
+    { dur: 1, s: 67, a: 60, t: 55, b: 43 }, // G4 (-vó)
     { dur: 3, s: 72, a: 64, t: 55, b: 48 }, // C5 (C major)
+    { dur: 2, s: 72, a: 64, t: 55, b: 48 }, // C5 (sustain)
 
-    // Phrase 3
-    { dur: 1, s: 69, a: 65, t: 60, b: 41 }, // A4
-    { dur: 1.5, s: 72, a: 65, t: 60, b: 41 }, // C5
-    { dur: 0.5, s: 69, a: 65, t: 60, b: 41 },
-    { dur: 0.5, s: 72, a: 65, t: 60, b: 45 },
-    { dur: 0.5, s: 69, a: 65, t: 60, b: 45 },
-    { dur: 2, s: 65, a: 60, t: 57, b: 41 }, // F4
-    { dur: 1, s: 60, a: 57, t: 53, b: 41 }, // C4
-    { dur: 1.5, s: 62, a: 58, t: 53, b: 46 }, // D4 (Bb)
-    { dur: 0.5, s: 65, a: 62, t: 58, b: 46 },
-    { dur: 0.5, s: 65, a: 62, t: 58, b: 46 },
-    { dur: 0.5, s: 62, a: 58, t: 53, b: 46 },
-    { dur: 2, s: 60, a: 57, t: 53, b: 41 }, // C4 (F)
+    // Phrase 3 (12 beats)
+    { dur: 1, s: 69, a: 65, t: 60, b: 41 }, // A4 (fui)
+    { dur: 1.5, s: 72, a: 65, t: 60, b: 41 }, // C5 (cie-)
+    { dur: 0.5, s: 69, a: 65, t: 60, b: 41 }, // A4 (-go)
+    { dur: 0.5, s: 72, a: 65, t: 60, b: 45 }, // C5 (mas)
+    { dur: 0.5, s: 69, a: 65, t: 60, b: 45 }, // A4
+    { dur: 2, s: 65, a: 60, t: 57, b: 41 }, // F4 (hoy)
+    { dur: 1, s: 60, a: 57, t: 53, b: 41 }, // C4 (mi-)
+    { dur: 1.5, s: 62, a: 58, t: 53, b: 46 }, // D4 (-ro)
+    { dur: 0.5, s: 65, a: 62, t: 58, b: 46 }, // F4
+    { dur: 0.5, s: 65, a: 62, t: 58, b: 46 }, // F4
+    { dur: 0.5, s: 62, a: 58, t: 53, b: 46 }, // D4
+    { dur: 2, s: 60, a: 57, t: 53, b: 41 }, // C4 (yo)
 
-    // Phrase 4 (Ending cadence)
-    { dur: 1, s: 60, a: 57, t: 53, b: 41 },
-    { dur: 2, s: 65, a: 60, t: 57, b: 41 },
-    { dur: 0.5, s: 69, a: 60, t: 57, b: 41 },
-    { dur: 0.5, s: 65, a: 60, t: 57, b: 41 },
-    { dur: 2, s: 69, a: 60, t: 57, b: 48 }, // F/C
-    { dur: 1, s: 67, a: 60, t: 58, b: 48 }, // C7
-    { dur: 3, s: 65, a: 60, t: 57, b: 41 }, // F Major resolution
+    // Phrase 4 (12 beats — Ending cadence)
+    { dur: 1, s: 60, a: 57, t: 53, b: 41 }, // C4 (per-)
+    { dur: 2, s: 65, a: 60, t: 57, b: 41 }, // F4 (-di-)
+    { dur: 0.5, s: 69, a: 60, t: 57, b: 41 }, // A4 (-do y)
+    { dur: 0.5, s: 65, a: 60, t: 57, b: 41 }, // F4
+    { dur: 2, s: 69, a: 60, t: 57, b: 48 }, // A4 (Él me ha-)
+    { dur: 1, s: 67, a: 60, t: 58, b: 48 }, // G4 (-lló)
+    { dur: 5, s: 65, a: 60, t: 57, b: 41 }, // F4 (resolution)
   ];
 
   return buildScoreFromChords(
@@ -114,49 +115,67 @@ export function createAmazingGraceDemo(): ScoreData {
 }
 
 /**
- * Classic Public Domain 4-Part SATB Hymn: "Santo, Santo, Santo" (Nicaea)
- * Key: D Major (2 sharps, fifths = +2), Time: 4/4, 8 measures (opening hymn period)
+ * Classic Public Domain 4-Part SATB Hymn: "Santo, Santo, Santo" (Nicaea — John B. Dykes)
+ * Key: D Major (2 sharps, fifths = +2), Time: 4/4, authentic full 16-measure SATB hymn
  */
 export function createSantoSantoDemo(): ScoreData {
-  // D4=62, E4=64, F#4=66, G4=67, A4=69, B4=71, C#5=73, D5=74
+  // D4=62, E4=64, F#4=66, G4=67, G#4=68, A4=69, B4=71, C#5=73, D5=74
   const slices: ChordSlice[] = [
-    // Compás 1: D - D - F# - F#
-    { dur: 1, s: 62, a: 57, t: 54, b: 50 },
-    { dur: 1, s: 62, a: 57, t: 54, b: 50 },
-    { dur: 1, s: 66, a: 62, t: 57, b: 50 },
-    { dur: 1, s: 66, a: 62, t: 57, b: 50 },
-    // Compás 2: A (half) - A (half)
-    { dur: 2, s: 69, a: 62, t: 57, b: 45 },
-    { dur: 2, s: 69, a: 62, t: 57, b: 50 },
-    // Compás 3: B (half) - B - B
-    { dur: 2, s: 71, a: 67, t: 62, b: 43 },
-    { dur: 1, s: 71, a: 67, t: 62, b: 43 },
-    { dur: 1, s: 71, a: 67, t: 62, b: 43 },
-    // Compás 4: A (half) - F# (half)
-    { dur: 2, s: 69, a: 66, t: 62, b: 50 },
-    { dur: 2, s: 66, a: 62, t: 57, b: 50 },
+    // Phrase 1 (Measures 1-4): "Santo, Santo, Santo, Señor Omnipotente"
+    { dur: 1, s: 62, a: 57, t: 54, b: 50 }, // D4
+    { dur: 1, s: 62, a: 57, t: 54, b: 50 }, // D4
+    { dur: 1, s: 66, a: 62, t: 57, b: 50 }, // F#4
+    { dur: 1, s: 66, a: 62, t: 57, b: 50 }, // F#4
+    { dur: 2, s: 69, a: 62, t: 57, b: 45 }, // A4
+    { dur: 2, s: 69, a: 62, t: 57, b: 50 }, // A4
+    { dur: 2, s: 71, a: 67, t: 62, b: 43 }, // B4
+    { dur: 1, s: 71, a: 67, t: 62, b: 43 }, // B4
+    { dur: 1, s: 71, a: 67, t: 62, b: 43 }, // B4
+    { dur: 2, s: 69, a: 66, t: 62, b: 50 }, // A4
+    { dur: 2, s: 66, a: 62, t: 57, b: 50 }, // F#4
 
-    // Compás 5: A - A - A - A
-    { dur: 1, s: 69, a: 64, t: 57, b: 45 },
-    { dur: 1, s: 69, a: 64, t: 57, b: 45 },
-    { dur: 1, s: 69, a: 66, t: 62, b: 50 },
-    { dur: 1, s: 69, a: 64, t: 61, b: 45 },
-    // Compás 6: D5 (half) - C#5 - A
-    { dur: 2, s: 74, a: 66, t: 62, b: 47 },
-    { dur: 1, s: 73, a: 64, t: 61, b: 45 },
-    { dur: 1, s: 69, a: 64, t: 57, b: 45 },
-    // Compás 7: G - F# - E (half)
-    { dur: 1, s: 67, a: 62, t: 59, b: 43 },
-    { dur: 1, s: 66, a: 62, t: 57, b: 45 },
-    { dur: 2, s: 64, a: 61, t: 55, b: 45 },
-    // Compás 8: D (whole)
-    { dur: 4, s: 62, a: 57, t: 54, b: 50 },
+    // Phrase 2 (Measures 5-8): "Siempre el labio mío loores te dará"
+    { dur: 1, s: 69, a: 64, t: 57, b: 45 }, // A4
+    { dur: 1, s: 69, a: 64, t: 57, b: 45 }, // A4
+    { dur: 1, s: 69, a: 64, t: 57, b: 45 }, // A4
+    { dur: 1, s: 69, a: 64, t: 57, b: 45 }, // A4
+    { dur: 2, s: 74, a: 66, t: 62, b: 47 }, // D5
+    { dur: 1, s: 73, a: 64, t: 61, b: 45 }, // C#5
+    { dur: 1, s: 69, a: 64, t: 57, b: 45 }, // A4
+    { dur: 1, s: 64, a: 61, t: 57, b: 45 }, // E4
+    { dur: 1, s: 69, a: 64, t: 61, b: 45 }, // A4
+    { dur: 1.5, s: 71, a: 64, t: 62, b: 40 }, // B4 (E7)
+    { dur: 0.5, s: 69, a: 64, t: 61, b: 45 }, // A4
+    { dur: 4, s: 69, a: 64, t: 61, b: 45 }, // A4 (A major cadence)
+
+    // Phrase 3 (Measures 9-12): "Santo, Santo, Santo, te adoro reverente"
+    { dur: 1, s: 62, a: 57, t: 54, b: 50 }, // D4
+    { dur: 1, s: 62, a: 57, t: 54, b: 50 }, // D4
+    { dur: 1, s: 66, a: 62, t: 57, b: 50 }, // F#4
+    { dur: 1, s: 66, a: 62, t: 57, b: 50 }, // F#4
+    { dur: 2, s: 69, a: 62, t: 57, b: 45 }, // A4
+    { dur: 2, s: 69, a: 62, t: 57, b: 50 }, // A4
+    { dur: 2, s: 71, a: 67, t: 62, b: 43 }, // B4
+    { dur: 1, s: 71, a: 67, t: 62, b: 43 }, // B4
+    { dur: 1, s: 71, a: 67, t: 62, b: 43 }, // B4
+    { dur: 2, s: 69, a: 64, t: 61, b: 45 }, // A4
+    { dur: 2, s: 69, a: 64, t: 55, b: 45 }, // A4 (A7)
+
+    // Phrase 4 (Measures 13-16): "Dios en tres personas, bendita Trinidad"
+    { dur: 2, s: 74, a: 66, t: 62, b: 50 }, // D5 (D)
+    { dur: 2, s: 69, a: 66, t: 62, b: 42 }, // A4 (D/F#)
+    { dur: 2, s: 71, a: 62, t: 59, b: 43 }, // B4 (G)
+    { dur: 2, s: 66, a: 62, t: 57, b: 50 }, // F#4 (D)
+    { dur: 1, s: 67, a: 64, t: 59, b: 40 }, // G4 (Em)
+    { dur: 1, s: 64, a: 61, t: 55, b: 45 }, // E4 (A7)
+    { dur: 2, s: 64, a: 61, t: 55, b: 45 }, // E4 (A7)
+    { dur: 4, s: 62, a: 57, t: 54, b: 50 }, // D4 (D Major resolution)
   ];
 
   return buildScoreFromChords(
     'demo_santo_santo',
     'Santo, Santo, Santo (Nicaea SATB)',
-    96,
+    94,
     { numerator: 4, denominator: 4 },
     2,
     slices

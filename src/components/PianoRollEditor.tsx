@@ -35,6 +35,7 @@ interface PianoRollEditorProps {
   canUndo: boolean;
   canRedo: boolean;
   onCleanupOverlaps: () => void;
+  onSnapToKey: () => void;
 }
 
 type EditorTool = 'select' | 'draw' | 'erase';
@@ -61,6 +62,7 @@ export const PianoRollEditor: React.FC<PianoRollEditorProps> = ({
   canUndo,
   canRedo,
   onCleanupOverlaps,
+  onSnapToKey,
 }) => {
   const [tool, setTool] = useState<EditorTool>('select');
   const [activeVoice, setActiveVoice] = useState<VoiceId>('soprano');
@@ -785,6 +787,14 @@ export const PianoRollEditor: React.FC<PianoRollEditorProps> = ({
               className="rounded-md border border-slate-800 bg-slate-950 p-1.5 text-slate-300 hover:bg-slate-800 disabled:opacity-35"
             >
               <Redo2 className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={onSnapToKey}
+              title="Ajustar notas fuera de escala a la armadura actual"
+              className="flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950 px-2 py-1 text-xs text-emerald-300 hover:bg-slate-800"
+            >
+              <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+              <span className="hidden xl:inline">Afinar escala</span>
             </button>
             <button
               onClick={onCleanupOverlaps}

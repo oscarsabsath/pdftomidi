@@ -43,6 +43,7 @@ import {
   getKeyInfo,
   getSingleVerseDurationBeats,
   KEY_SIGNATURES,
+  snapNotesToKeySignature,
 } from './utils/musicTheory';
 
 type WorkspaceTab = 'pianoroll' | 'omr' | 'export';
@@ -306,6 +307,12 @@ export function App() {
     if (!score) return;
     const cleaned = cleanupVoiceOverlaps(score.notes);
     handleChangeNotes(cleaned, true);
+  }, [score, handleChangeNotes]);
+
+  const handleSnapToKey = useCallback(() => {
+    if (!score) return;
+    const snapped = snapNotesToKeySignature(score.notes, score.keySignatureFifths);
+    handleChangeNotes(snapped, true);
   }, [score, handleChangeNotes]);
 
   const handlePreviewNote = useCallback(
@@ -579,6 +586,7 @@ export function App() {
                 canUndo={historyIndex > 0}
                 canRedo={historyIndex < history.length - 1}
                 onCleanupOverlaps={handleCleanupOverlaps}
+                onSnapToKey={handleSnapToKey}
               />
             )}
 

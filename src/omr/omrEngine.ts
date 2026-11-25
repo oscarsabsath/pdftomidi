@@ -487,29 +487,29 @@ function detectBarlinesForStaff(noStaff: BinaryImage, staff: DetectedStaff): num
 }
 
 /**
- * Analyze header area of the first treble staff to estimate Key Signature (sharps/flats) and Time Signature.
+ * Detect actual clef + key signature (+ optional time signature on system 0) boundary for any staff
+ * so clefs and key accidentals on System 2, 3, ... are never misread as notes.
  */
 function analyzeHeader(
   noStaff: BinaryImage,
-  firstStaff: DetectedStaff
+  firstStaff: DetectedStaff,
+  isFirstSystem = true
 ): { keyFifths: number; timeSig: TimeSignature; musicStartX: number } {
   const { width, height, data } = noStaff;
   const s = firstStaff.staffSpace;
-  const topY = Math.max(0, Math.round(firstStaff.lineYs[0] - s * 1.2));
-  const botY = Math.min(height - 1, Math.round(firstStaff.lineYs[4] + s * 1.2));
+  const topY = Math.max(0, Math.round(firstStaff.lineYs[0] - s * 1.3));
+  const botY = Math.min(height - 1, Math.round(firstStaff.lineYs[4] + s * 1.3));
 
-  // Clef typically occupies leftX .. leftX + 3.6*s
-  const clefEndX = Math.round(firstStaff.leftX + s * 3.7);
-  const scanEndX = Math.min(firstStaff.rightX, Math.round(firstStaff.leftX + s * 12.5));
+  const scanStartX = Math.max(0, firstStaff.leftX + Math.round(s * 0.4));
+  const scanEndX = Math.min(firstStaff.rightX, Math.round(firstStaff.leftX + s * 14.0));
 
-  // Column projection to segment individual header glyphs (key accidentals + time signature)
-  const colDark = new Int32Array(scanEndX - clefEndX + 1);
-  for (let x = clefEndX; x <= scanEndX; x++) {
+  const colDark = new Int32Array(Math.max(1, scanEndX - scanStartX + 1));
+  for (let x = scanStartX; x <= scanEndX; x++) {
     let c = 0;
     for (let y = topY; y <= botY; y++) {
       if (data[y * width + x]) c++;
     }
-    colDark[x - clefEndX] = c;
+    colDark[x - scanStartX] = c;
   }
 
   interface GlyphSpan {
@@ -524,16 +524,16 @@ function analyzeHeader(
     pixels: number;
   }
 
-  const glyphs: GlyphSpan[] = [];
+  const allGlyphs: GlyphSpan[] = [];
   let gx = 0;
   while (gx < colDark.length) {
     if (colDark[gx] >= 2) {
       const start = gx;
       while (gx < colDark.length && colDark[gx] >= 1) gx++;
-      const x0 = clefEndX + start;
-      const x1 = clefEndX + gx - 1;
+      const x0 = scanStartX + start;
+      const x1 = scanStartX + gx - 1;
       const w = x1 - x0 + 1;
-      if (w >= Math.max(3, s * 0.25) && w <= s * 2.4) {
+      if (w >= Math.max(3, s * 0.22) && w <= s * 3.8) {
         let y0 = botY;
         let y1 = topY;
         let pixels = 0;
@@ -548,7 +548,7 @@ function analyzeHeader(
         }
         const h = y1 - y0 + 1;
         if (h >= s * 0.7 && pixels >= s * 1.2) {
-          glyphs.push({
+          allGlyphs.push({
             x0,
             x1,
             y0,
@@ -566,21 +566,45 @@ function analyzeHeader(
     }
   }
 
-  // Separate key signature symbols vs time signature glyph
-  // Time signature sits across nearly full staff height (3.2*s .. 4.6*s) with two stacked halves
+  // 1. Identify the Clef glyph (first substantial glyph near leftX)
+  let clefEndX = Math.round(firstStaff.leftX + s * 3.6);
+  const postClefGlyphs: GlyphSpan[] = [];
+  let foundClef = false;
+
+  for (const g of allGlyphs) {
+    if (!foundClef && g.x0 < firstStaff.leftX + s * 4.2 && g.h >= s * 2.2) {
+      clefEndX = Math.max(clefEndX, g.x1 + Math.round(s * 0.2));
+      foundClef = true;
+      continue;
+    }
+    if (g.x0 >= clefEndX - s * 0.2) {
+      postClefGlyphs.push(g);
+    }
+  }
+
+  // 2. Separate key signature accidentals vs time signature glyph
   let timeSigGlyph: GlyphSpan | null = null;
   const accidentalGlyphs: GlyphSpan[] = [];
+  const trebleBottom = firstStaff.lineYs[4];
+  const SHARP_STEPS = [8, 5, 9, 6, 3, 7];
+  const FLAT_STEPS = [4, 7, 3, 6, 2, 5];
 
-  for (const g of glyphs) {
-    const gapFromPrev = accidentalGlyphs.length
-      ? g.x0 - accidentalGlyphs[accidentalGlyphs.length - 1].x1
-      : g.x0 - clefEndX;
+  for (const g of postClefGlyphs) {
+    const prevRight =
+      accidentalGlyphs.length > 0 ? accidentalGlyphs[accidentalGlyphs.length - 1].x1 : clefEndX;
+    const gap = g.x0 - prevRight;
 
-    // Stop if we jumped far into the first measure notes
-    if (gapFromPrev > s * 3.8 && timeSigGlyph) break;
+    // Stop if we hit a wide gap into the musical notes
+    if (gap > s * 2.6 && (timeSigGlyph || !isFirstSystem || accidentalGlyphs.length > 0)) break;
 
-    if (g.h >= s * 2.9 && g.h <= s * 4.8 && g.w >= s * 0.6 && g.w <= s * 2.1 && !timeSigGlyph) {
-      // Check if it spans both top half and bottom half of staff (stacked digits like 4/4 or 3/4)
+    if (
+      isFirstSystem &&
+      !timeSigGlyph &&
+      g.h >= s * 2.9 &&
+      g.h <= s * 4.8 &&
+      g.w >= s * 0.6 &&
+      g.w <= s * 2.2
+    ) {
       const midY = firstStaff.lineYs[2];
       let topMass = 0;
       let botMass = 0;
@@ -598,25 +622,37 @@ function analyzeHeader(
       }
     }
 
-    // Key signature accidentals are tall-ish (1.3s..2.7s), narrow (0.35s..1.15s)
-    if (g.h >= s * 1.15 && g.h <= s * 2.85 && g.w >= s * 0.3 && g.w <= s * 1.35) {
-      accidentalGlyphs.push(g);
+    // Key signature accidentals must be narrow & positioned near canonical sharp or flat staff steps
+    if (
+      accidentalGlyphs.length < 6 &&
+      g.h >= s * 1.15 &&
+      g.h <= s * 2.85 &&
+      g.w >= s * 0.28 &&
+      g.w <= s * 1.25 &&
+      gap <= s * 2.2
+    ) {
+      const step = Math.round((trebleBottom - g.cy) / (s / 2));
+      const idx = accidentalGlyphs.length;
+      const matchesSharpPos = Math.abs(step - SHARP_STEPS[idx]) <= 1;
+      const matchesFlatPos = Math.abs(step - FLAT_STEPS[idx]) <= 1;
+      if (matchesSharpPos || matchesFlatPos) {
+        accidentalGlyphs.push(g);
+      } else {
+        // Not at a canonical key signature step -> probably first note!
+        break;
+      }
     }
   }
 
-  // Classify detected key signature accidentals as sharp (+) or flat (-)
   let keyFifths = 0;
-  if (accidentalGlyphs.length > 0 && accidentalGlyphs.length <= 6) {
-    let sharpVotes = 0;
-    let flatVotes = 0;
-    const trebleBottom = firstStaff.lineYs[4];
-    // First sharp in treble is F5 (step 8); first flat is B4 (step 4)
-    const firstStep = Math.round((trebleBottom - accidentalGlyphs[0].cy) / (s / 2));
-    if (firstStep >= 7) sharpVotes += 2;
-    else if (firstStep >= 3 && firstStep <= 5) flatVotes += 2;
+  if (accidentalGlyphs.length > 0) {
+    let sharpScore = 0;
+    let flatScore = 0;
+    accidentalGlyphs.forEach((ag, idx) => {
+      const step = Math.round((trebleBottom - ag.cy) / (s / 2));
+      if (Math.abs(step - SHARP_STEPS[idx]) <= 1) sharpScore += 2;
+      if (Math.abs(step - FLAT_STEPS[idx]) <= 1) flatScore += 2;
 
-    for (const ag of accidentalGlyphs) {
-      // Sharps have symmetric top/bottom mass; flats have more mass in bottom half (the belly)
       let upper = 0;
       let lower = 0;
       for (let y = ag.y0; y <= ag.y1; y++) {
@@ -627,15 +663,13 @@ function analyzeHeader(
           }
         }
       }
-      if (lower > upper * 1.28) flatVotes++;
-      else sharpVotes++;
-    }
-
+      if (lower > upper * 1.28) flatScore += 1;
+      else sharpScore += 1;
+    });
     const count = Math.min(6, accidentalGlyphs.length);
-    keyFifths = sharpVotes >= flatVotes ? count : -count;
+    keyFifths = sharpScore >= flatScore ? count : -count;
   }
 
-  // Estimate time signature from upper digit shape if detected
   let timeSig: TimeSignature = { numerator: 4, denominator: 4 };
   if (timeSigGlyph) {
     const midY = firstStaff.lineYs[2];
@@ -655,7 +689,6 @@ function analyzeHeader(
       }
     }
     const upperTotal = Math.max(1, leftUpper + rightUpper);
-    // '3' has noticeably more ink on the right side than left; '4' has strong crossbar & right stem; '6/8' has bottom-heavy loop
     if (rightUpper / upperTotal > 0.63 && midHorizBand / upperTotal < 0.24) {
       timeSig = { numerator: 3, denominator: 4 };
     } else if (leftUpper / upperTotal > 0.56) {
@@ -666,12 +699,55 @@ function analyzeHeader(
   }
 
   const musicStartX = timeSigGlyph
-    ? Math.round(timeSigGlyph.x1 + s * 0.8)
+    ? Math.round(timeSigGlyph.x1 + s * 0.85)
     : accidentalGlyphs.length > 0
-      ? Math.round(accidentalGlyphs[accidentalGlyphs.length - 1].x1 + s * 1.2)
-      : Math.round(firstStaff.leftX + s * 6.2);
+      ? Math.round(accidentalGlyphs[accidentalGlyphs.length - 1].x1 + s * 1.0)
+      : Math.round(clefEndX + s * 1.1);
 
   return { keyFifths, timeSig, musicStartX };
+}
+
+/**
+ * Identify horizontal rows outside a staff that contain printed lyrics/text
+ * (characterized by high horizontal ink-transition density) so text letters like 'o'/'a'/'e'
+ * are never misdetected as noteheads.
+ */
+function buildLyricRowMask(noStaff: BinaryImage, staff: DetectedStaff, yMin: number, yMax: number): Uint8Array {
+  const { width, data } = noStaff;
+  const s = staff.staffSpace;
+  const mask = new Uint8Array(noStaff.height);
+  const staffTopSafe = staff.lineYs[0] - s * 0.7;
+  const staffBotSafe = staff.lineYs[4] + s * 0.7;
+  const x0 = Math.max(0, staff.leftX);
+  const x1 = Math.min(width - 1, staff.rightX);
+  const spanW = Math.max(1, x1 - x0);
+
+  for (let y = yMin; y <= yMax; y++) {
+    // Never mask rows inside the 5 staff lines
+    if (y >= staffTopSafe && y <= staffBotSafe) continue;
+
+    let transitions = 0;
+    let prev = 0;
+    const rowOff = y * width;
+    for (let x = x0; x <= x1; x++) {
+      const cur = data[rowOff + x];
+      if (cur !== prev) {
+        transitions++;
+        prev = cur;
+      }
+    }
+    // Printed lyrics across a staff produce > 26 transitions per 1000px (dense letters);
+    // ledger-line notes produce very sparse transitions.
+    if (transitions > Math.max(22, (spanW / 1000) * 28)) {
+      for (let dy = -Math.round(s * 0.55); dy <= Math.round(s * 0.55); dy++) {
+        const yy = y + dy;
+        if (yy >= 0 && yy < noStaff.height && (yy < staffTopSafe || yy > staffBotSafe)) {
+          mask[yy] = 1;
+        }
+      }
+    }
+  }
+  return mask;
 }
 
 /**
@@ -682,6 +758,7 @@ function detectNoteheadsOnStaff(
   noStaff: BinaryImage,
   origBin: BinaryImage,
   staff: DetectedStaff,
+  allPageStaves: DetectedStaff[],
   musicStartX: number,
   sensitivity: number,
   keyFifths: number
@@ -694,10 +771,24 @@ function detectNoteheadsOnStaff(
   const innerRx = Math.max(1, Math.round(s * 0.30));
   const innerRy = Math.max(1, Math.round(s * 0.20));
 
-  const yMin = Math.max(ry + 2, Math.round(staff.lineYs[0] - s * 2.8));
-  const yMax = Math.min(height - ry - 3, Math.round(staff.lineYs[4] + s * 2.8));
+  // Clamp vertical search safely so we never spill into adjacent staves' lyrics or notes
+  const staffIdx = allPageStaves.indexOf(staff);
+  const prevStaff = staffIdx > 0 ? allPageStaves[staffIdx - 1] : null;
+  const nextStaff = staffIdx >= 0 && staffIdx < allPageStaves.length - 1 ? allPageStaves[staffIdx + 1] : null;
+
+  const upperLimitFromPrev = prevStaff
+    ? Math.round((prevStaff.lineYs[4] + staff.lineYs[0]) / 2 + s * 0.5)
+    : 0;
+  const lowerLimitFromNext = nextStaff
+    ? Math.round((staff.lineYs[4] + nextStaff.lineYs[0]) / 2 - s * 0.5)
+    : height - 1;
+
+  const yMin = Math.max(ry + 2, upperLimitFromPrev, Math.round(staff.lineYs[0] - s * 2.1));
+  const yMax = Math.min(height - ry - 3, lowerLimitFromNext, Math.round(staff.lineYs[4] + s * 2.1));
   const xMin = Math.max(rx + 2, musicStartX);
   const xMax = Math.min(width - rx - 3, staff.rightX - Math.round(s * 0.5));
+
+  const lyricMask = buildLyricRowMask(noStaff, staff, yMin, yMax);
 
   // Precompute elliptical kernel offsets for fast filled + hollow scoring
   const innerOffsets: Array<[number, number]> = [];
@@ -721,7 +812,6 @@ function detectNoteheadsOnStaff(
         outerHaloOffsets.push([dx, dy]);
       }
 
-      // Narrow perimeter shell (0.52..1.28) split into 4 quadrants for accurate hollow (half/whole) notehead detection
       if (nOuter >= 0.52 && nOuter <= 1.28) {
         if (Math.abs(dy / ry) >= Math.abs(dx / rx)) {
           if (dy < 0) hollowRimTop.push([dx, dy]);
@@ -742,7 +832,6 @@ function detectNoteheadsOnStaff(
   const rimLeftLen = Math.max(1, hollowRimLeft.length);
   const rimRightLen = Math.max(1, hollowRimRight.length);
 
-  // Skip barline x-zones so barlines never trigger false noteheads
   const isNearBarline = (x: number) =>
     staff.barlineXs.some((bx) => Math.abs(x - bx) < s * 0.55);
 
@@ -755,10 +844,11 @@ function detectNoteheadsOnStaff(
 
   const candidates: Candidate[] = [];
   const stepPx = Math.max(2, Math.round(s * 0.14));
-  const filledMinFill = 0.78 - (sensitivity - 0.5) * 0.24; // ~0.66..0.78
-  const hollowMinRim = 0.36 - (sensitivity - 0.5) * 0.12; // ~0.30..0.36 per quadrant
+  const filledMinFill = 0.78 - (sensitivity - 0.5) * 0.24;
+  const hollowMinRim = 0.38 - (sensitivity - 0.5) * 0.12;
 
   for (let y = yMin; y <= yMax; y += stepPx) {
+    if (lyricMask[y]) continue;
     for (let x = xMin; x <= xMax; x += stepPx) {
       if (isNearBarline(x)) continue;
 
@@ -781,7 +871,6 @@ function detectNoteheadsOnStaff(
       let isHollow = false;
       let hollowRimScore = 0;
 
-      // For hollow noteheads (half/whole), verify bright interior on noStaff AND closed dark elliptical rim on origBin
       if (!isFilled && innerRatio <= 0.34) {
         let qTop = 0;
         let qBot = 0;
@@ -809,7 +898,6 @@ function detectNoteheadsOnStaff(
         const rLeft = qLeft / rimLeftLen;
         const rRight = qRight / rimRightLen;
 
-        // Require all 4 sides of the oval rim to have ink so a line+stem corner cannot fake a hollow note
         if (
           rTop >= hollowMinRim * 0.85 &&
           rBot >= hollowMinRim * 0.85 &&
@@ -823,16 +911,14 @@ function detectNoteheadsOnStaff(
 
       if (!isFilled && !isHollow) continue;
 
-      // Check halo emptiness so thick beams, text letters, or dense blobs are rejected
       let haloDark = 0;
       for (let k = 0; k < outerHaloOffsets.length; k++) {
         const [dx, dy] = outerHaloOffsets[k];
         if (data[(y + dy) * width + (x + dx)]) haloDark++;
       }
       const haloRatio = haloDark / haloLen;
-      if (haloRatio > 0.45) continue;
+      if (haloRatio > 0.44) continue;
 
-      // Reject pure horizontal/vertical thin lines by verifying vertical & horizontal diameter
       if (isFilled) {
         let vertSpan = 0;
         for (let dy = -ry; dy <= ry; dy++) {
@@ -870,21 +956,25 @@ function detectNoteheadsOnStaff(
     if (!overlaps) kept.push(cand);
   }
 
-  // Refine each kept notehead: detect stem direction, beams/flags, dots, accidental, and pitch
   const results: DetectedOmrNote[] = [];
   const bottomLineY = staff.lineYs[4];
 
   for (const c of kept) {
-    // Refine center locally (+/- 2px) for pitch accuracy
     const diatonicStep = Math.round((bottomLineY - c.y) / (s / 2));
-    // Clamp reasonable choral staff range (-5..+13 steps)
-    if (diatonicStep < -5 || diatonicStep > 14) continue;
+    if (diatonicStep < -4 || diatonicStep > 12) continue;
 
     const stemInfo = detectStemAndBeam(origBin, c.x, c.y, s, rx);
+
+    // STRICT MUSICAL VALIDATION (eliminates lyric letters, dynamics, punctuation, and scan noise):
+    // 1. Every filled notehead (quarter/eighth/sixteenth) MUST have a vertical stem!
+    if (!c.isHollow && stemInfo.stemDir === 'none') continue;
+    // 2. A stemless hollow notehead (whole note) MUST sit cleanly on or immediately touching the 5-line staff
+    //    (never floating in the lyric band above/below the staff!).
+    if (c.isHollow && stemInfo.stemDir === 'none' && (diatonicStep < -1 || diatonicStep > 9)) continue;
+
     const isDotted = detectAugmentationDot(noStaff, c.x, c.y, s, rx);
     const accidental = detectLocalAccidental(noStaff, c.x, c.y, s, rx);
 
-    // Determine note duration
     let durationBeats = 1;
     if (c.isHollow) {
       durationBeats = stemInfo.stemDir === 'none' ? 4 : 2;
@@ -893,12 +983,6 @@ function detectNoteheadsOnStaff(
     }
     if (isDotted) durationBeats *= 1.5;
 
-    // Require either a stem, hollow whole-note shape, or strong filled notehead confidence
-    // (filters out stray lyric dots/periods outside the staff)
-    const outsideStaff = diatonicStep < -1 || diatonicStep > 9;
-    if (outsideStaff && stemInfo.stemDir === 'none' && !c.isHollow) continue;
-    if (!c.isHollow && stemInfo.stemDir === 'none' && c.score < 0.78) continue;
-
     const pitch = staffStepToMidi(
       staff.clef,
       diatonicStep,
@@ -906,7 +990,6 @@ function detectNoteheadsOnStaff(
       accidental !== 0 ? accidental : null
     );
 
-    // Initial voice assignment based on clef + stem direction (refined later in chord slices)
     let voice: VoiceId;
     if (staff.clef === 'treble') {
       voice = stemInfo.stemDir === 'down' ? 'contralto' : 'soprano';
@@ -932,7 +1015,7 @@ function detectNoteheadsOnStaff(
       voice,
       durationBeats,
       startBeat: 0,
-      confidence: Math.max(0.35, Math.min(0.99, c.score)),
+      confidence: Math.max(0.4, Math.min(0.99, c.score)),
     });
   }
 
@@ -947,10 +1030,14 @@ function detectStemAndBeam(
   rx: number
 ): { stemDir: 'up' | 'down' | 'none'; hasBeamOrFlag: boolean } {
   const { width, height, data } = origBin;
-  const stemLen = Math.round(s * 2.65);
+  const stemLen = Math.round(s * 2.35);
 
-  // Measure longest vertical ink coverage on right side going UP
-  const measureVertical = (xStart: number, xEnd: number, yStart: number, yEnd: number): { ratio: number; bestX: number } => {
+  const measureVertical = (
+    xStart: number,
+    xEnd: number,
+    yStart: number,
+    yEnd: number
+  ): { ratio: number; bestX: number } => {
     const y0 = Math.max(0, Math.min(yStart, yEnd));
     const y1 = Math.min(height - 1, Math.max(yStart, yEnd));
     const total = Math.max(1, y1 - y0 + 1);
@@ -960,8 +1047,11 @@ function detectStemAndBeam(
     for (let x = Math.max(0, xStart); x <= Math.min(width - 1, xEnd); x++) {
       let dark = 0;
       for (let y = y0; y <= y1; y++) {
-        // Allow 1px horizontal tolerance for slightly tilted stems
-        if (data[y * width + x] || (x > 0 && data[y * width + x - 1]) || (x < width - 1 && data[y * width + x + 1])) {
+        if (
+          data[y * width + x] ||
+          (x > 0 && data[y * width + x - 1]) ||
+          (x < width - 1 && data[y * width + x + 1])
+        ) {
           dark++;
         }
       }
@@ -974,36 +1064,51 @@ function detectStemAndBeam(
     return { ratio: bestRatio, bestX };
   };
 
+  // Standard stems + shared chord stems (when S+A or T+B share a single stem)
   const upRight = measureVertical(
-    Math.round(cx + rx * 0.45),
+    Math.round(cx + rx * 0.42),
     Math.round(cx + rx * 1.25),
     cy - stemLen,
-    cy - Math.round(s * 0.35)
+    cy - Math.round(s * 0.3)
   );
   const downLeft = measureVertical(
     Math.round(cx - rx * 1.25),
-    Math.round(cx - rx * 0.45),
-    cy + Math.round(s * 0.35),
+    Math.round(cx - rx * 0.42),
+    cy + Math.round(s * 0.3),
     cy + stemLen
+  );
+  const downRight = measureVertical(
+    Math.round(cx + rx * 0.42),
+    Math.round(cx + rx * 1.25),
+    cy + Math.round(s * 0.3),
+    cy + stemLen
+  );
+  const upLeft = measureVertical(
+    Math.round(cx - rx * 1.25),
+    Math.round(cx - rx * 0.42),
+    cy - stemLen,
+    cy - Math.round(s * 0.3)
   );
 
   let stemDir: 'up' | 'down' | 'none' = 'none';
   let tipX = cx;
   let tipY = cy;
 
-  if (upRight.ratio >= 0.72 && upRight.ratio >= downLeft.ratio) {
+  const bestUp = Math.max(upRight.ratio, upLeft.ratio * 0.96);
+  const bestDown = Math.max(downLeft.ratio, downRight.ratio * 0.96);
+
+  if (bestUp >= 0.70 && bestUp >= bestDown) {
     stemDir = 'up';
-    tipX = upRight.bestX;
-    tipY = Math.max(0, cy - Math.round(s * 3.0));
-  } else if (downLeft.ratio >= 0.72) {
+    tipX = upRight.ratio >= upLeft.ratio ? upRight.bestX : upLeft.bestX;
+    tipY = Math.max(0, cy - Math.round(s * 2.9));
+  } else if (bestDown >= 0.70) {
     stemDir = 'down';
-    tipX = downLeft.bestX;
-    tipY = Math.min(height - 1, cy + Math.round(s * 3.0));
+    tipX = downLeft.ratio >= downRight.ratio ? downLeft.bestX : downRight.bestX;
+    tipY = Math.min(height - 1, cy + Math.round(s * 2.9));
   }
 
   let hasBeamOrFlag = false;
   if (stemDir !== 'none') {
-    // Check thick dark horizontal/diagonal beam mass near the stem tip
     const checkY0 = Math.max(0, tipY - Math.round(s * 0.7));
     const checkY1 = Math.min(height - 1, tipY + Math.round(s * 0.7));
     const checkX0 = Math.max(0, tipX - Math.round(s * 0.9));
@@ -1017,7 +1122,7 @@ function detectStemAndBeam(
       }
       if (colThick >= Math.max(3, Math.round(s * 0.28))) beamCols++;
     }
-    if (beamCols / totalCols >= 0.55) hasBeamOrFlag = true;
+    if (beamCols / totalCols >= 0.58) hasBeamOrFlag = true;
   }
 
   return { stemDir, hasBeamOrFlag };
@@ -1031,10 +1136,10 @@ function detectAugmentationDot(
   rx: number
 ): boolean {
   const { width, height, data } = noStaff;
-  const x0 = Math.min(width - 1, Math.round(cx + rx * 1.25));
+  const x0 = Math.min(width - 1, Math.round(cx + rx * 1.3));
   const x1 = Math.min(width - 1, Math.round(cx + rx * 2.15));
-  const y0 = Math.max(0, Math.round(cy - s * 0.45));
-  const y1 = Math.min(height - 1, Math.round(cy + s * 0.45));
+  const y0 = Math.max(0, Math.round(cy - s * 0.42));
+  const y1 = Math.min(height - 1, Math.round(cy + s * 0.42));
 
   let dark = 0;
   let area = 0;
@@ -1045,9 +1150,13 @@ function detectAugmentationDot(
     }
   }
   const fill = dark / Math.max(1, area);
-  return dark >= 5 && fill >= 0.14 && fill <= 0.46;
+  return dark >= 5 && fill >= 0.14 && fill <= 0.42;
 }
 
+/**
+ * Strict isolated local accidental detector: verifies clear white separation from both the notehead
+ * and any preceding stem/barline so stems never trigger random out-of-key semitone shifts!
+ */
 function detectLocalAccidental(
   noStaff: BinaryImage,
   cx: number,
@@ -1056,11 +1165,30 @@ function detectLocalAccidental(
   rx: number
 ): -1 | 0 | 1 {
   const { width, height, data } = noStaff;
-  const x0 = Math.max(0, Math.round(cx - rx * 2.6));
-  const x1 = Math.max(0, Math.round(cx - rx * 1.2));
-  const y0 = Math.max(0, Math.round(cy - s * 1.1));
-  const y1 = Math.min(height - 1, Math.round(cy + s * 1.1));
-  if (x1 <= x0 || y1 <= y0) return 0;
+  // Require a clean white gutter between notehead left edge and accidental box
+  const gutterX = Math.max(0, Math.round(cx - rx * 1.35));
+  let gutterDark = 0;
+  const gy0 = Math.max(0, Math.round(cy - s * 0.4));
+  const gy1 = Math.min(height - 1, Math.round(cy + s * 0.4));
+  for (let y = gy0; y <= gy1; y++) {
+    if (data[y * width + gutterX]) gutterDark++;
+  }
+  if (gutterDark > 2) return 0; // stem or adjacent note is touching left side -> NOT an accidental
+
+  const x0 = Math.max(0, Math.round(cx - rx * 2.85));
+  const x1 = Math.max(0, Math.round(cx - rx * 1.5));
+  const y0 = Math.max(0, Math.round(cy - s * 1.15));
+  const y1 = Math.min(height - 1, Math.round(cy + s * 1.15));
+  if (x1 <= x0 + 3 || y1 <= y0 + 6) return 0;
+
+  // Reject tall continuous vertical strokes (stems / barlines extending above & below the accidental box)
+  let overflowTop = 0;
+  let overflowBot = 0;
+  for (let x = x0; x <= x1; x++) {
+    if (y0 - 3 >= 0 && data[(y0 - 3) * width + x]) overflowTop++;
+    if (y1 + 3 < height && data[(y1 + 3) * width + x]) overflowBot++;
+  }
+  if (overflowTop >= 2 || overflowBot >= 2) return 0;
 
   let upperDark = 0;
   let lowerDark = 0;
@@ -1075,21 +1203,22 @@ function detectLocalAccidental(
         else lowerDark++;
       }
     }
-    if (colDark >= s * 0.9) verticalColsWithInk++;
+    if (colDark >= s * 1.05) verticalColsWithInk++;
   }
 
   const totalDark = upperDark + lowerDark;
   const boxArea = (x1 - x0 + 1) * (y1 - y0 + 1);
   const density = totalDark / Math.max(1, boxArea);
 
-  if (density < 0.18 || density > 0.58 || verticalColsWithInk < 1) return 0;
-  if (verticalColsWithInk >= 2 && Math.abs(upperDark - lowerDark) < totalDark * 0.25) return 1; // sharp
-  if (lowerDark > upperDark * 1.35) return -1; // flat
+  if (density < 0.22 || density > 0.52 || verticalColsWithInk < 1) return 0;
+  if (verticalColsWithInk >= 2 && Math.abs(upperDark - lowerDark) < totalDark * 0.20) return 1;
+  if (verticalColsWithInk === 1 && lowerDark > upperDark * 1.45) return -1;
   return 0;
 }
 
 /**
  * Align detected notes across all staves of a system into synchronized musical beats & clean SATB voices.
+ * Supports anacrusis (pickup measures) and preserves per-voice note durations.
  */
 function alignSystemNotesToBeats(
   systemStaves: DetectedStaff[],
@@ -1097,23 +1226,22 @@ function alignSystemNotesToBeats(
   layout: 'grand-staff' | 'four-staves' | 'single-staff',
   timeSig: TimeSignature,
   systemStartBeat: number,
-  musicStartX: number
+  musicStartX: number,
+  isVeryFirstSystem: boolean
 ): { events: NoteEvent[]; nextBeat: number } {
   const beatsPerMeasure = getBeatsPerMeasure(timeSig);
   const s = systemStaves[0]?.staffSpace ?? 16;
 
-  // Unify barline Xs across all staves in this system
   const allBarXs = systemStaves.flatMap((st) => st.barlineXs).sort((a, b) => a - b);
   const unifiedBars: number[] = [];
   for (const bx of allBarXs) {
-    if (unifiedBars.length === 0 || bx - unifiedBars[unifiedBars.length - 1] > s * 2.2) {
+    if (unifiedBars.length === 0 || bx - unifiedBars[unifiedBars.length - 1] > s * 2.6) {
       unifiedBars.push(bx);
     } else {
       unifiedBars[unifiedBars.length - 1] = Math.round((unifiedBars[unifiedBars.length - 1] + bx) / 2);
     }
   }
 
-  // Filter out barlines too close to musicStartX
   const validBars = unifiedBars.filter((bx) => bx > musicStartX + s * 2.5);
   const measureBounds: Array<{ x0: number; x1: number }> = [];
   let prevX = musicStartX;
@@ -1128,15 +1256,20 @@ function alignSystemNotesToBeats(
     });
   }
 
+  const widths = measureBounds.map((m) => m.x1 - m.x0).sort((a, b) => a - b);
+  const medianMeasureW = widths[Math.floor(widths.length / 2)] || 300;
+
   const events: NoteEvent[] = [];
   let noteCounter = 1;
+  let runningBeat = systemStartBeat;
 
   measureBounds.forEach((mb, mIdx) => {
-    const measureStartBeat = systemStartBeat + mIdx * beatsPerMeasure;
     const mNotes = systemNotes.filter((n) => n.x >= mb.x0 - s * 0.4 && n.x < mb.x1 + s * 0.4);
-    if (mNotes.length === 0) return;
+    if (mNotes.length === 0) {
+      runningBeat += beatsPerMeasure;
+      return;
+    }
 
-    // Cluster simultaneous notes horizontally across Treble & Bass into vertical chord columns
     mNotes.sort((a, b) => a.x - b.x || a.y - b.y);
     const columns: DetectedOmrNote[][] = [];
     for (const n of mNotes) {
@@ -1148,19 +1281,25 @@ function alignSystemNotesToBeats(
       }
     }
 
-    // Assign rhythmic beats to each column cleanly inside this measure
-    // Use detected column durations; if total fits neatly into beatsPerMeasure, accumulate directly;
-    // otherwise interpolate proportionally from X coordinates and quantize to 0.5-beat grid.
     const colDurs = columns.map((col) => {
-      // Majority/median duration in this chord column
       const durs = col.map((n) => n.durationBeats).sort((a, b) => a - b);
-      return durs[Math.floor(durs.length / 2)];
+      return durs[0]; // shortest moving voice governs column advance step
     });
     const sumDur = colDurs.reduce((a, b) => a + b, 0);
-    const exactMatch = Math.abs(sumDur - beatsPerMeasure) <= 0.51;
+
+    // Detect anacrusis (pickup measure) at start of piece: narrow first bar with <= 2 beats
+    const isPickup =
+      isVeryFirstSystem &&
+      mIdx === 0 &&
+      measureBounds.length > 1 &&
+      (mb.x1 - mb.x0 < medianMeasureW * 0.58 || (columns.length <= 2 && sumDur <= beatsPerMeasure * 0.55));
+
+    const measureBeats = isPickup ? Math.max(0.5, Math.min(beatsPerMeasure - 0.5, sumDur)) : beatsPerMeasure;
+    const exactMatch = Math.abs(sumDur - measureBeats) <= 0.51;
 
     let cursorBeat = 0;
     const mWidth = Math.max(1, mb.x1 - mb.x0);
+    const measureEvents: NoteEvent[] = [];
 
     columns.forEach((col, colIdx) => {
       let beatInMeasure: number;
@@ -1169,8 +1308,8 @@ function alignSystemNotesToBeats(
         cursorBeat += colDurs[colIdx];
       } else {
         const avgX = col.reduce((sum, n) => sum + n.x, 0) / col.length;
-        const rel = Math.max(0, Math.min(0.95, (avgX - mb.x0 - s * 0.6) / Math.max(1, mWidth - s * 1.2)));
-        beatInMeasure = Math.round(rel * beatsPerMeasure * 2) / 2;
+        const rel = Math.max(0, Math.min(0.95, (avgX - mb.x0 - s * 0.5) / Math.max(1, mWidth - s * 1.0)));
+        beatInMeasure = Math.round(rel * measureBeats * 2) / 2;
       }
 
       const nextBeatInMeasure =
@@ -1186,19 +1325,21 @@ function alignSystemNotesToBeats(
                       1,
                       (columns[colIdx + 1].reduce((sum, n) => sum + n.x, 0) / columns[colIdx + 1].length -
                         mb.x0 -
-                        s * 0.6) /
-                        Math.max(1, mWidth - s * 1.2)
+                        s * 0.5) /
+                        Math.max(1, mWidth - s * 1.0)
                     )
                   ) *
-                    beatsPerMeasure *
+                    measureBeats *
                     2
                 ) / 2
               )
-          : beatsPerMeasure;
+          : measureBeats;
 
-      const safeDur = Math.max(0.5, Math.min(beatsPerMeasure - beatInMeasure, exactMatch ? colDurs[colIdx] : nextBeatInMeasure - beatInMeasure));
+      const defaultColDur = Math.max(
+        0.5,
+        Math.min(measureBeats - beatInMeasure, exactMatch ? colDurs[colIdx] : nextBeatInMeasure - beatInMeasure)
+      );
 
-      // Refine SATB voice separation within this chord column
       if (layout === 'four-staves') {
         const voiceMap: VoiceId[] = ['soprano', 'contralto', 'tenor', 'bajo'];
         for (const n of col) {
@@ -1206,8 +1347,6 @@ function alignSystemNotesToBeats(
           if (st) n.voice = voiceMap[Math.min(3, st.staffIndexInSystem)];
         }
       } else {
-        // Grand staff: split treble notes into Soprano (high) & Contralto (low),
-        // bass notes into Tenor (high) & Bajo (low)
         const trebleCol = col.filter((n) => n.staffClef === 'treble').sort((a, b) => b.pitch - a.pitch);
         const bassCol = col.filter((n) => n.staffClef === 'bass').sort((a, b) => b.pitch - a.pitch);
 
@@ -1226,33 +1365,52 @@ function alignSystemNotesToBeats(
         }
       }
 
-      const absStartBeat = measureStartBeat + beatInMeasure;
-      // Avoid emitting duplicate notes on exact same voice + beat
+      const absStartBeat = runningBeat + beatInMeasure;
       const emittedVoices = new Set<VoiceId>();
       for (const n of col) {
         if (emittedVoices.has(n.voice)) continue;
         emittedVoices.add(n.voice);
 
+        // Preserve individual voice duration (e.g. held half note against moving quarters) within measure
+        const ownDur = Math.max(
+          defaultColDur,
+          Math.min(measureBeats - beatInMeasure, n.durationBeats)
+        );
         n.startBeat = absStartBeat;
-        n.durationBeats = safeDur;
+        n.durationBeats = ownDur;
 
-        events.push({
+        measureEvents.push({
           id: `omr_p${n.pageIndex}_s${n.systemIndex}_${noteCounter++}`,
           voice: n.voice,
           pitch: n.pitch,
           startBeat: Math.round(absStartBeat * 16) / 16,
-          durationBeats: Math.max(0.25, Math.round(safeDur * 16) / 16),
+          durationBeats: Math.max(0.25, Math.round(ownDur * 16) / 16),
           velocity: n.voice === 'soprano' ? 98 : 90,
           pageIndex: n.pageIndex,
           bbox: { x: n.x - n.w / 2, y: n.y - n.h / 2, w: n.w, h: n.h },
         });
       }
     });
+
+    // Trim any per-voice duration that overlaps the next note in that same voice inside this measure
+    const voicesList: VoiceId[] = ['soprano', 'contralto', 'tenor', 'bajo'];
+    for (const v of voicesList) {
+      const vn = measureEvents.filter((e) => e.voice === v).sort((a, b) => a.startBeat - b.startBeat);
+      for (let i = 0; i < vn.length - 1; i++) {
+        const gap = vn[i + 1].startBeat - vn[i].startBeat;
+        if (gap > 0 && vn[i].durationBeats > gap) {
+          vn[i].durationBeats = gap;
+        }
+      }
+    }
+
+    events.push(...measureEvents);
+    runningBeat += measureBeats;
   });
 
   return {
     events,
-    nextBeat: systemStartBeat + measureBounds.length * beatsPerMeasure,
+    nextBeat: runningBeat,
   };
 }
 
@@ -1346,13 +1504,17 @@ export async function runAutonomousOmr(
 
     for (let sysIdx = 0; sysIdx <= maxSysIdx; sysIdx++) {
       const sysStaves = staves.filter((st) => st.systemIndex === sysIdx);
-      const sysMusicStartX =
-        pIdx === 0 && sysIdx === 0
-          ? firstSystemMusicStartX
-          : Math.round(
+      const isVeryFirst = pIdx === 0 && sysIdx === 0;
+      const sysHeader = isVeryFirst ? null : analyzeHeader(noStaff, sysStaves[0], false);
+      const sysMusicStartX = isVeryFirst
+        ? firstSystemMusicStartX
+        : Math.max(
+            sysHeader?.musicStartX ?? 0,
+            Math.round(
               sysStaves[0].leftX +
-                sysStaves[0].staffSpace * (4.2 + Math.abs(detectedKeyFifths) * 0.72)
-            );
+                sysStaves[0].staffSpace * (4.0 + Math.abs(detectedKeyFifths) * 0.72)
+            )
+          );
 
       const sysNotes: DetectedOmrNote[] = [];
       for (const st of sysStaves) {
@@ -1360,6 +1522,7 @@ export async function runAutonomousOmr(
           noStaff,
           bin,
           st,
+          staves,
           sysMusicStartX,
           settings.sensitivity,
           detectedKeyFifths
@@ -1373,7 +1536,8 @@ export async function runAutonomousOmr(
         pageLayout,
         detectedTimeSignature,
         globalBeatCursor,
-        sysMusicStartX
+        sysMusicStartX,
+        isVeryFirst
       );
       allEvents.push(...aligned.events);
       pageDetectedNotes.push(...sysNotes);

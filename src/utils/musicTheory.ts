@@ -332,6 +332,25 @@ export function getVoicePitchStats(notes: NoteEvent[], voice: VoiceId): { count:
   };
 }
 
+/**
+ * Snap all notes to the nearest diatonic scale degree of the current Key Signature.
+ * Very helpful for cleaning up stray off-key notes after OMR on noisy scanned PDFs/photos.
+ */
+export function snapNotesToKeySignature(notes: NoteEvent[], keyFifths: number): NoteEvent[] {
+  const tonic = getKeyInfo(keyFifths).tonicPitchClass;
+  const majorIntervals = new Set([0, 2, 4, 5, 7, 9, 11].map((i) => (tonic + i) % 12));
+
+  return notes.map((n) => {
+    const pc = ((n.pitch % 12) + 12) % 12;
+    if (majorIntervals.has(pc)) return n;
+    const upPc = (pc + 1) % 12;
+    const downPc = (pc + 11) % 12;
+    if (majorIntervals.has(downPc)) return { ...n, pitch: n.pitch - 1 };
+    if (majorIntervals.has(upPc)) return { ...n, pitch: n.pitch + 1 };
+    return n;
+  });
+}
+
 let idSeq = 1000;
 export function nextNoteId(): string {
   idSeq += 1;
